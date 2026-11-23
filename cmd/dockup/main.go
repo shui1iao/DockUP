@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/shui1iao/DockUP/internal/agent"
 	"github.com/shui1iao/DockUP/internal/config"
@@ -91,11 +92,20 @@ func main() {
 		}
 	}
 
-	store, _ := config.NewStore(cfg.DataPath)
+	store, err := config.NewStore(cfg.DataPath)
+	if err != nil {
+		log.Error("init config store failed", "path", cfg.DataPath, "error", err)
+		os.Exit(1)
+	}
 	hub := reverse.NewHub(store, log)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/reverse/connect", hub.Handle)
-	srv := &http.Server{Addr: cfg.AgentListen, Handler: mux}
+	srv := &http.Server{
+		Addr:              cfg.AgentListen,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	go func() {
 		log.Info("DockUP reverse hub listening", "listen", cfg.AgentListen)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

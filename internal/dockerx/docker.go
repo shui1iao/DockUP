@@ -146,25 +146,36 @@ func (c *Client) UpdateContainer(ctx context.Context, id string, imageRef string
 		return oldID, "", fmt.Errorf("rename old container: %w", err)
 	}
 
+	rollback := func(removeNewID string) {
+		rbCtx, rbCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer rbCancel()
+		if removeNewID != "" {
+			if err := c.delete(rbCtx, "/containers/"+url.PathEscape(removeNewID)+"?force=true"); err != nil {
+				c.log.Warn("rollback failed to remove new container", "container", removeNewID, "error", err)
+			}
+		}
+		if err := c.postEmpty(rbCtx, "/containers/"+url.PathEscape(oldID)+"/rename?name="+url.QueryEscape(oldName)); err != nil {
+			c.log.Warn("rollback failed to rename backup container", "container", backupName, "error", err)
+		}
+		if err := c.postEmpty(rbCtx, "/containers/"+url.PathEscape(oldID)+"/start"); err != nil {
+			c.log.Error("rollback failed to restart old container", "container", oldName, "error", err)
+		}
+	}
+
 	var created createResp
 	if err := c.doJSON(ctx, http.MethodPost, "/containers/create?name="+url.QueryEscape(oldName), body, &created); err != nil {
-		_ = c.postEmpty(ctx, "/containers/"+url.PathEscape(oldID)+"/rename?name="+url.QueryEscape(oldName))
-		_ = c.postEmpty(ctx, "/containers/"+url.PathEscape(oldID)+"/start")
+		rollback("")
 		return oldID, "", fmt.Errorf("create new container: %w", err)
 	}
 	newID = created.ID
 
 	if err := c.postEmpty(ctx, "/containers/"+url.PathEscape(newID)+"/start"); err != nil {
-		_ = c.delete(ctx, "/containers/"+url.PathEscape(newID)+"?force=true")
-		_ = c.postEmpty(ctx, "/containers/"+url.PathEscape(oldID)+"/rename?name="+url.QueryEscape(oldName))
-		_ = c.postEmpty(ctx, "/containers/"+url.PathEscape(oldID)+"/start")
+		rollback(newID)
 		return oldID, newID, fmt.Errorf("start new container failed, rolled back: %w", err)
 	}
 
 	if err := c.waitHealthy(ctx, newID, 5*time.Minute); err != nil {
-		_ = c.delete(ctx, "/containers/"+url.PathEscape(newID)+"?force=true")
-		_ = c.postEmpty(ctx, "/containers/"+url.PathEscape(oldID)+"/rename?name="+url.QueryEscape(oldName))
-		_ = c.postEmpty(ctx, "/containers/"+url.PathEscape(oldID)+"/start")
+		rollback(newID)
 		return oldID, newID, fmt.Errorf("healthcheck failed, rolled back: %w", err)
 	}
 

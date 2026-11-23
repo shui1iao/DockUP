@@ -50,6 +50,7 @@ type Updater struct {
 	confirmDeletes  map[string]confirmDelete
 	confirmAgents   map[string]confirmAgentDelete
 	addStates       map[int64]addServerState
+	updating        map[string]struct{}
 	currentInterval time.Duration
 	mu              sync.Mutex
 }
@@ -436,6 +437,9 @@ func (u *Updater) notifyUpdateFrom(ctx context.Context, agentID, agentName strin
 	text := formatPrompt(agentName, c, oldVersion, newVersion)
 	msgID, err := u.bot.SendUpdatePrompt(ctx, text, "update:"+token, "ignore:"+token)
 	if err != nil {
+		u.mu.Lock()
+		delete(u.pending, token)
+		u.mu.Unlock()
 		return "", err
 	}
 	if msgID != 0 {
@@ -498,6 +502,24 @@ func (u *Updater) applyUpdate(parent context.Context, p pendingUpdate) {
 	if parent == nil {
 		parent = context.Background()
 	}
+	lockKey := p.AgentID + ":" + p.Container.ID
+	u.mu.Lock()
+	if u.updating == nil {
+		u.updating = map[string]struct{}{}
+	}
+	if _, busy := u.updating[lockKey]; busy {
+		u.mu.Unlock()
+		u.log.Warn("container update already in progress, skipping duplicate", "container", p.Container.Name, "id", p.Container.ID)
+		u.editUpdateMessage(fmt.Sprintf("⏳ 容器 %s 正在更新中，请勿重复触发。", p.Container.Name), p.MessageID)
+		return
+	}
+	u.updating[lockKey] = struct{}{}
+	u.mu.Unlock()
+	defer func() {
+		u.mu.Lock()
+		delete(u.updating, lockKey)
+		u.mu.Unlock()
+	}()
 	if p.Container.Name == "dockup" {
 		ctx, cancel := context.WithTimeout(parent, u.cfg.Timeout)
 		defer cancel()

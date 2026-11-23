@@ -65,7 +65,10 @@ func (c *Client) Projects(ctx context.Context) ([]ProjectInfo, error) {
 	projects := map[string]*ProjectInfo{}
 	for _, item := range items {
 		ci := c.containerInfoFromListItem(ctx, item)
-		key := ci.ID[:12]
+		key := ci.ID
+		if len(key) > 12 {
+			key = key[:12]
+		}
 		name := ci.Name
 		typ := "docker"
 		workingDir := ""

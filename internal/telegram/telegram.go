@@ -88,7 +88,18 @@ func (b *Bot) authorized(chatID, userID string) bool {
 	allowed := strings.TrimPrefix(strings.TrimSpace(b.chatID), "telegram:")
 	chatID = strings.TrimPrefix(strings.TrimSpace(chatID), "telegram:")
 	userID = strings.TrimPrefix(strings.TrimSpace(userID), "telegram:")
-	return allowed != "" && (chatID == allowed || userID == allowed)
+	if allowed == "" {
+		return false
+	}
+	// In group/supergroup chats (negative chatID), require explicit sender match
+	// when allowed is a positive user ID, or require chatID match when allowed is a group ID.
+	if strings.HasPrefix(chatID, "-") {
+		if strings.HasPrefix(allowed, "-") {
+			return chatID == allowed
+		}
+		return userID != "" && userID == allowed
+	}
+	return chatID == allowed || (userID != "" && userID == allowed)
 }
 
 func (b *Bot) Send(ctx context.Context, text string) error {
